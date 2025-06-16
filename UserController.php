@@ -219,6 +219,13 @@ class UserController extends Controller
         return redirect(Response::HTTP_FORBIDDEN, '403 Forbidden');
     }
 
+    /**
+     * Review candidate data.
+     *
+     * @param  int  $id
+     * @param  string $status
+     * @return \Illuminate\Http\Response
+     */
     public function reviewForm($id, $status)
     {
         if (auth()->user()->hasRole('Admin')){
