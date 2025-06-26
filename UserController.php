@@ -30,16 +30,36 @@ class UserController extends Controller
         if (auth()->user()->hasRole('Admin')) {
             // Exclude users with the 'Admin' role from the list
             $users = User::whereDoesntHave('roles', function ($query) {
-                $query->where('name', 'Admin');
+                $query->whereIn('name', ['Sub Admin','Admin']);
             })->latest()->paginate(15);
         } elseif (auth()->user()->hasRole('Employee')) {
             // Show only the current logged-in user
             $users = User::where('id', auth()->id())->paginate(1);
+        }elseif (auth()->user()->hasRole('Sub Admin')) {
+            // Show only the current logged-in user
+            $users = User::whereDoesntHave('roles', function ($query) {
+                $query->whereIn('name', ['Sub Admin','Admin']);
+            })->latest()->paginate(15);
         } else {
             abort(Response::HTTP_FORBIDDEN, '403 Forbidden');
         }
 
         return view('admin.users.index', compact('users'));
+    }
+
+     public function subAdminIndex()
+    {
+        abort_if(Gate::denies('sub_admin_access'), Response::HTTP_FORBIDDEN, '403 Forbidden');
+        if (auth()->user()->hasRole('Admin')) {
+            // Exclude users with the 'Admin' role from the list
+            $users = User::where('id','!=',auth()->user()->id)->whereHas('roles', function ($query) {
+                $query->where('name', 'Sub Admin');
+            })->latest()->paginate(15);
+        } else {
+            abort(Response::HTTP_FORBIDDEN, '403 Forbidden');
+        }
+
+        return view('admin.users.sub-admin-index', compact('users'));
     }
 
     /**
@@ -51,6 +71,18 @@ class UserController extends Controller
     {
         abort_if(Gate::denies('permission_create'), Response::HTTP_FORBIDDEN, '403 Forbidden');
         return view('admin.users.create');
+
+    }
+
+        /**
+     * Show the form for creating a new resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function subAdminCreate()
+    {
+        abort_if(Gate::denies('sub_admin_create'), Response::HTTP_FORBIDDEN, '403 Forbidden');
+        return view('admin.users.sub-admin-create');
 
     }
 
@@ -79,6 +111,31 @@ class UserController extends Controller
             return redirect()->route('admin.users.index')->with('message', 'User created successfully!');
         }
         return redirect()->route('admin.users.index')->with('message', 'User create failed!');
+    }
+
+    public function subAdminStore(Request $request)
+    {
+        //
+        $validatedData = $request->validate([
+            'name' => 'required|regex:/^([a-zA-Z]+)(\s[a-zA-Z]+)*$/|max:255',
+            'email' => 'required|email|unique:users,email|max:255',
+            'password' => 'required|string|min:8', // Adjust the min length as per your requirements
+        ]);
+
+        $user = new User();
+
+        $user->name = $request->name;
+        $user->email = $request->email;
+        $user->password = $request->password;
+
+        if ($user->save()) {
+             if (auth()->user()->hasRole('Admin')) {
+                $role = Role::where(['name' => 'Sub Admin'])->first();
+                $user->syncRoles([$role->id??1]);
+            }
+            return redirect()->route('admin.users.subAdmin.index')->with('message', 'Sub-Admin created successfully!');
+        }
+        return redirect()->route('admin.users.subAdmin.index')->with('message', 'Sub-Admin create failed!');
     }
 
     /**
@@ -110,6 +167,15 @@ class UserController extends Controller
         return view('admin.users.edit', compact('user','documenttype','questions','roles'));
     }
 
+    public function subAdminEdit(User $user)
+    {
+        abort_if(Gate::denies('sub_admin_edit'), Response::HTTP_FORBIDDEN, '403 Forbidden');
+        if (auth()->user()->hasRole('Employee') && auth()->id() !== $user->id) {
+            abort(Response::HTTP_FORBIDDEN, '403 Forbidden');
+        }
+        return view('admin.users.sub-admin-edit', compact('user'));
+    }
+
     /**
      * Update the specified resource in storage.
      *
@@ -117,9 +183,9 @@ class UserController extends Controller
      * @param  int  $id
      * @return \Illuminate\Http\Response
      */
+    //public function update(Request $request, $id)
     public function update(Request $request,$id)
     {
-
         $user = User::findOrFail($id);
         if (auth()->user()->hasRole('Employee') && auth()->id() !== $user->id) {
             abort(Response::HTTP_FORBIDDEN, '403 Forbidden');
@@ -188,6 +254,29 @@ class UserController extends Controller
         return redirect()->route('admin.users.index');
     }
 
+    public function subAdminUpdate(Request $request,$id)
+    {
+        $user = User::findOrFail($id);
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => auth()->user()->hasRole('Admin') ? 'required|email|unique:users,email,' . $user->id : 'nullable',
+            'phone' => 'required|string|max:20',
+            'password' => 'nullable|string|min:8|confirmed'
+        ]);
+        $user->name = $request->name;
+        $user->phone = $request->phone;
+        $user->email = $request->email;
+        if ($request->password) {
+            $user->password = Hash::make($request->password);
+        }
+        if ($user->save()) {
+            toast( 'User updated successfully.','success');
+            return redirect()->route('admin.users.subAdmin.index');
+        }
+        toast('User update failed.','error');
+        return redirect()->route('admin.users.subAdmin.index');
+    }
+
     /**
      * Remove the specified resource from storage.
      *
@@ -199,13 +288,6 @@ class UserController extends Controller
         //
     }
 
-    /**
-     * Change the specified user status.
-     *
-     * @param  int  $id
-     * @param  string $status
-     * @return \Illuminate\Http\Response
-     */
     public function banUnban($id, $status)
     {
         if (auth()->user()->hasRole('Admin')){
@@ -219,13 +301,6 @@ class UserController extends Controller
         return redirect(Response::HTTP_FORBIDDEN, '403 Forbidden');
     }
 
-    /**
-     * Review candidate data.
-     *
-     * @param  int  $id
-     * @param  string $status
-     * @return \Illuminate\Http\Response
-     */
     public function reviewForm($id, $status)
     {
         if (auth()->user()->hasRole('Admin')){
@@ -268,5 +343,19 @@ class UserController extends Controller
 
         return view('admin.users.questions-view', compact('policy'));
 
+    }
+
+      /**
+     * Remove the specified resource from storage.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function subAdminDestroy(User $user)
+    {
+        abort_if(Gate::denies('sub_admin_delete'), Response::HTTP_FORBIDDEN, '403 Forbidden');
+        $user->delete();
+        toast('Sub-Admin deleted successfully.','success');
+        return redirect()->route('admin.users.subAdmin.index');
     }
 }
